@@ -1,0 +1,15 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "package": "dev.liftmarker.mixin",
+  "plugin": "dev.liftmarker.compat.LiftMarkerMixinPlugin",
+  "compatibilityLevel": "JAVA_21",
+  "client": [
+    "DiagramScreenMixin",
+    "DiagramStickyNoteMixin",
+    "ScreenInvoker"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}

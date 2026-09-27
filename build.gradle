@@ -1,0 +1,111 @@
+plugins {
+    id 'java-library'
+    id 'net.neoforged.moddev' version '2.0.147'
+    id 'idea'
+}
+
+tasks.named('wrapper', Wrapper).configure {
+    distributionType = Wrapper.DistributionType.BIN
+}
+
+version = mod_version
+group = mod_group_id
+
+base {
+    archivesName = mod_id
+}
+
+java.toolchain.languageVersion = JavaLanguageVersion.of(21)
+
+neoForge {
+    version = project.neo_version
+
+    parchment {
+        mappingsVersion = project.parchment_mappings_version
+        minecraftVersion = project.parchment_minecraft_version
+    }
+
+    mods {
+        "${mod_id}" {
+            sourceSet(sourceSets.main)
+        }
+    }
+}
+
+// Create, Create Aeronautics (Simulated) and Sable are compiled against straight from the jars in a
+// local instance. Their jar-in-jar dependencies (Simulated, Sable companion, Veil, Catnip/Ponder, ...)
+// are unpacked next to them. None of this ends up in our output jar.
+def depsModsDir = file(project.deps_mods_dir)
+def depsJarPatterns = ['create-1.21.1-*.jar', 'create-aeronautics-bundled-*.jar', 'sable-neoforge-*.jar']
+def extractedDepsDir = layout.buildDirectory.dir('deps')
+
+def extractDeps = tasks.register('extractDeps') {
+    description = 'Copies the mod jars this addon compiles against, unpacking nested jar-in-jar dependencies.'
+    inputs.files(fileTree(depsModsDir) { include depsJarPatterns })
+    outputs.dir(extractedDepsDir)
+
+    doLast {
+        def outDir = extractedDepsDir.get().asFile
+        project.delete(outDir)
+        outDir.mkdirs()
+
+        def roots = fileTree(depsModsDir) { include depsJarPatterns }.files
+        if (roots.size() < depsJarPatterns.size()) {
+            throw new GradleException("Expected Create, Create Aeronautics and Sable jars in ${depsModsDir}; " +
+                    "set deps_mods_dir to a mods folder that has them.")
+        }
+
+        def unpack
+        unpack = { InputStream stream, String name ->
+            def bytes = stream.readAllBytes()
+            new File(outDir, name).bytes = bytes
+            new java.util.zip.ZipInputStream(new ByteArrayInputStream(bytes)).withCloseable { zip ->
+                def entry
+                while ((entry = zip.nextEntry) != null) {
+                    if (entry.name.startsWith('META-INF/jarjar/') && entry.name.endsWith('.jar')) {
+                        unpack(new ByteArrayInputStream(zip.readAllBytes()), entry.name.substring(entry.name.lastIndexOf('/') + 1))
+                    }
+                }
+            }
+        }
+
+        roots.each { jar -> jar.withInputStream { unpack(it, jar.name) } }
+    }
+}
+
+dependencies {
+    compileOnly files(extractedDepsDir.map { dir -> fileTree(dir) { include '*.jar' } }).builtBy(extractDeps)
+}
+
+var generateModMetadata = tasks.register("generateModMetadata", ProcessResources) {
+    var replaceProperties = [
+            minecraft_version      : minecraft_version,
+            minecraft_version_range: minecraft_version_range,
+            neo_version            : neo_version,
+            neo_version_range      : neo_version_range,
+            loader_version_range   : loader_version_range,
+            mod_id                 : mod_id,
+            mod_name               : mod_name,
+            mod_license            : mod_license,
+            mod_version            : mod_version,
+            simulated_version_range: simulated_version_range,
+            sable_version_range    : sable_version_range,
+    ]
+    inputs.properties replaceProperties
+    expand replaceProperties
+    from "src/main/templates"
+    into "build/generated/sources/modMetadata"
+}
+sourceSets.main.resources.srcDir generateModMetadata
+neoForge.ideSyncTask generateModMetadata
+
+// Ship the licence inside the jar.
+tasks.named('jar', Jar) {
+    from(files('LICENSE')) {
+        into 'META-INF'
+    }
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+}
